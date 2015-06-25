@@ -75,7 +75,7 @@ function select_region() {
     echo
     echo "Select an AWS Region"
     echo "--------------------"
-    AWS_AVAILABLE_REGIONS=$(aws --output text --profile $AWS_PROFILE ec2 --query 'Regions[].[RegionName]' describe-regions | sort)
+    AWS_AVAILABLE_REGIONS=$(aws --output text --profile $AWS_PROFILE ec2 --query 'Regions[].[RegionName]' describe-regions | sort -r)
     for region in $AWS_AVAILABLE_REGIONS ; do
         echo $region
     done
@@ -200,6 +200,28 @@ VPC_TYPES
         fi
     done
 }
+
+function select_keypair() {
+    echo
+    echo "Select an SSH key pair"
+    echo "----------------------"
+    echo
+    KEYPAIR_LIST=$(aws --output text ec2 describe-key-pairs --query 'KeyPairs[].KeyName' | sort)
+    for keyname in $KEYPAIR_LIST ; do
+        echo $keyname
+    done
+    KEY_NAME=
+    while [ -z "$KEY_NAME" ] ; do
+        echo
+        read -p "Select a key name: " KEY_NAME
+        echo "$KEYPAIR_LIST" | grep "$KEY_NAME" >/dev/null 2>&1
+        if [ $? != "0" ] ; then
+            echo "$KEY_NAME is not a valid key name"
+            KEY_NAME=""
+        fi
+    done
+}
+
 
 function get_bastion_ami() {
     DEFAULT_BASTION_IMAGE_ID=$(aws --output text --region $AWS_REGION --profile $AWS_PROFILE ec2 describe-images --owners "099720109477" --filters Name="name",Values='ubuntu/images/hvm/ubuntu-trusty-14.04-amd64-server*' --query 'sort_by(Images, &CreationDate)[-1].ImageId')
@@ -391,7 +413,7 @@ function select_virt_type() {
 function write_terraform_config() {
     NAT_IMAGE_ID=$(aws --output text --region $AWS_REGION --profile $AWS_PROFILE ec2 describe-images --filter Name="owner-alias",Values="amazon" --filter Name="name",Values="amzn-ami-vpc-nat*" Name="virtualization-type",Values="paravirtual" --query 'sort_by(Images, &CreationDate)[-1].ImageId')
     echo 'region = "'$AWS_REGION'"' > config.tfvars
-    echo 'key_name = "'econnell'"' >> config.tfvars
+    echo 'key_name = "'$KEY_NAME'"' >> config.tfvars
     echo 'nat_ami = "'$NAT_IMAGE_ID'"' >> config.tfvars
     echo 'bastion_ami = "'$BASTION_IMAGE_ID'"' >> config.tfvars
     echo 'cluster_size = "'$CLUSTER_SIZE'"' >> config.tfvars
@@ -413,6 +435,38 @@ function write_terraform_config() {
     fi
 }
 
+function apply_terraform() {
+    echo
+    echo "Configuration Complete"
+    echo "----------------------"
+    echo
+    echo "The configuration is complete and the terraform configuration has been copied"
+    echo "to `pwd`"
+    echo
+    echo "You can now use the standard terraform commands (plan/apply/show) in this directory."
+    echo
+    echo "To see the plan, run:"
+    echo "    terraform plan -var-file=config.tfvars -var-file=credentials.tfvars"
+    echo
+    echo "To apply the configuration and provision the cluster, run:"
+    echo "    terraform apply -var-file=config.tfvars -var-file=credentials.tfvars"
+    echo
+    PROVISION_CLUSTER=
+    while [ -z "$PROVISION_CLUSTER" ] ; do
+        read -p "Would you like to provision the cluster now [Y/n]: " PROVISION_CLUSTER
+        if [ -z "$PROVISION_CLUSTER" ] ; then
+            PROVISION_CLUSTER=y
+        fi
+        if [ "$PROVISION_CLUSTER" = "y" -o "$PROVISION_CLUSTER" = "Y" ] ; then
+            terraform apply -var-file=config.tfvars -var-file=credentials.tfvars
+            exit
+        fi
+        if [ "$PROVISION_CLUSTER" != "n" -a "$PROVISION_CLUSTER" != "N" ] ; then
+            PROVISION_CLUSTER=
+        fi
+    done
+}
+
 cat <<INTRO
 
 Provisioning a Deis Cluster
@@ -422,6 +476,7 @@ This script will walk you through the configuration and provisioning of a Deis
 cluster on AWS using Terraform (http://terraform.io).
 
 INTRO
+
 check_awscli
 get_aws_creds
 select_region
@@ -435,9 +490,10 @@ else
     get_existing_subnet
 fi
 select_instance_type
+select_keypair
 select_virt_type
 select_node_count
 write_terraform_config
+apply_terraform
 
-#terraform apply -var-file=config.tfvars -var-file=credentials.tfvars
 
