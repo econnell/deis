@@ -12,3 +12,10 @@ resource "aws_instance" "deis_node" {
     }
 }
 
+output "node-private-ips" {
+    value = "${join(", ", aws_instance.deis_node.*.private_ip)}"
+}
+
+output "node-public-ips" {
+    value = "${join(", ", aws_instance.deis_node.*.public_ip)}"
+}

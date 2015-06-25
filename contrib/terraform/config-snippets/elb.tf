@@ -32,3 +32,7 @@ resource "aws_elb" "deis_web_elb" {
         interval = 15
     }
 }
+
+output "elb-dns-name" {
+    value = "${aws_elb.deis_web_elb.dns_name}"
+}
