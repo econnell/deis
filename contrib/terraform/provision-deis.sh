@@ -29,6 +29,7 @@ function get_aws_creds() {
         for profile in $AWS_PROFILE_LIST ; do 
             echo $profile
         done
+        AWS_PROFILE=
         while [ "$AWS_PROFILE" = "" ] ; do
             echo
             read -p "Enter a profile configuration name [default]: " AWS_PROFILE
@@ -127,6 +128,8 @@ cluster nodes can be created.
 
 VPC_TYPES
 
+
+    VPC_TYPE=
     while [ -z "$VPC_TYPE" ] ; do
         read -p "Select a configuration [2]: " VPC_TYPE
         if [ -z "$VPC_TYPE" ] ; then
@@ -161,6 +164,7 @@ VPC_TYPES
         echo "1. VPC with Public Subnet for Deis Nodes"
         echo "2. VPC with Private Subnet for Deis Nodes (with a NAT and Bastion instance)"
         echo
+        VPC_TYPE
         while [ -z "$VPC_TYPE" ] ; do
             read -p "Select a configuration [1]: " VPC_TYPE
             case $VPC_TYPE in
@@ -189,6 +193,7 @@ VPC_TYPES
             echo "$vpcs"	
     done
     echo
+    VPC_ID=
     while [ -z "$VPC_ID" ] ; do 
         read -p "VPC ID: " VPC_ID
         echo "$VPC_LIST" | grep "$VPC_ID" >/dev/null 2>&1
@@ -233,6 +238,7 @@ function get_bastion_ami() {
     echo
     aws --output text --region $AWS_REGION --profile $AWS_PROFILE ec2 describe-images --image-ids "$DEFAULT_BASTION_IMAGE_ID" --query 'sort_by(Images, &CreationDate)[-1].Name'
     echo 
+    BASTION_IMAGE_ID=
     while [ -z "$BASTION_IMAGE_ID" ] ; do
         read -p "Enter an AMI ID for the bastion instance [${DEFAULT_BASTION_IMAGE_ID}]: " BASTION_IMAGE_ID
         if [ -z "$BASTION_IMAGE_ID" ] ; then
@@ -255,6 +261,7 @@ function get_existing_subnet() {
     AWS_VPC_SUBNET_LIST=$(aws --output text --region $AWS_REGION --profile $AWS_PROFILE ec2 describe-subnets --query 'Subnets[?VpcId==`'$VPC_ID'`].SubnetId')
     aws --output text --region $AWS_REGION --profile $AWS_PROFILE ec2 describe-subnets --query 'Subnets[?VpcId==`'$VPC_ID'`] | [?State==`available`].[SubnetId,CidrBlock,AvailabilityZone]'
     echo
+    SUBNET_ID=
     while [ "$SUBNET_ID" = "" ] ; do
         echo
         read -p "Select a subnet ID for cluster nodes: " SUBNET_ID
@@ -351,6 +358,7 @@ function select_instance_type() {
     echo "The recommended minimum instance types are m4.large, m3.large, c4.xlarge,"
     echo "c3.2xlarge, or r3.2xlarge"
     echo
+    AWS_INSTANCE_TYPE=
     read -p "Select an instance type [m3.large]: " AWS_INSTANCE_TYPE
     if [ -z "$AWS_INSTANCE_TYPE" ] ; then
         AWS_INSTANCE_TYPE="m3.large"
@@ -366,6 +374,7 @@ function select_node_count() {
     echo "an odd number of nodes.  If an even number is specified, the last node will"
     echo "be used as a standby for all quorum decisions."
     echo
+    CLUSTER_SIZE=
     while [ -z "$CLUSTER_SIZE" ] ; do
         read -p "Cluster size [3]: " CLUSTER_SIZE
         if [ -z "$CLUSTER_SIZE" ] ; then
@@ -380,7 +389,60 @@ function select_node_count() {
     done
 }
 
+function select_node_management() {
+    echo
+    echo "Select Node Management Configuration"
+    echo "------------------------------------"
+    echo
+    echo "There are two options for managing Deis nodes.  Nodes can be managed directly"
+    echo "by Terraform or with an AWS Auto Scaling Group."
+    echo
+    echo "1. Terraform Managed Deis Nodes"
+    echo "        Nodes managed directly by Terraform allow for better infrastructure"
+    echo "        visibility by Terraform.  Each node will be tracked directly in the"
+    echo "        Terraform state file and scaling up cluster size is done via the"
+    echo "        Terraform configuration.  However, if a cluster node dies, it will"
+    echo "        not automatically be restarted until a Terraform apply is done."
+    echo
+    echo "2. AWS Auto Scaling Group"
+    echo "        An Auto Scaling Group will enforce the configured number of nodes at"
+    echo "        all times.  If a node dies, the ASG will automatically start a new"
+    echo "        node to replace the dead instance immediately.  However, Terraform"
+    echo "        cannot directly manage individual nodes because the instance"
+    echo "        creation is managed by the ASG.  Terraform will not have any"
+    echo "        information about Deis nodes other than the number of nodes configured"
+    echo "        in the Auto Scaling Group"
+    echo
+    NODE_MANAGEMENT_TYPE=
+    while [ -z "$NODE_MANAGEMENT_TYPE" ] ; do
+        read -p "Select a node management option: [1]: " NODE_MANAGEMENT_TYPE
+        if [ -z "$NODE_MANAGEMENT_TYPE" ] ; then
+            NODE_MANAGEMENT_TYPE=1
+        fi
+        case $NODE_MANAGEMENT_TYPE in
+            1) 
+                NODE_MANAGEMENT_TYPE=tf
+                ;;
+            2) 
+                NODE_MANAGEMENT_TYPE=asg
+                ;;
+            *)
+                NODE_MANAGEMENT_TYPE=
+                echo
+                echo "Please select 1 Terraform managed nodes or 2 for AutoScalingGroup"
+                echo
+                ;;
+        esac
+    done
+
+}
+
 function select_virt_type() {
+    INSTANCE_TYPE_FAMILY=$(echo $AWS_INSTANCE_TYPE | sed 's/^\([^.]*\)\..*$/\1/')
+    if [ "$INSTANCE_TYPE_FAMILY" != "m3" -a "$INSTANCE_TYPE_FAMILY" != "c3" ] ; then
+        VIRT_TYPE="hvm"
+        return
+    fi
     echo
     echo "Select Virtualization Type"
     echo "--------------------------"
@@ -388,6 +450,7 @@ function select_virt_type() {
     echo "1. paravirtual (recommended)"
     echo "2. hvm"
     echo
+    VIRT_TYPE=
     while [ -z $VIRT_TYPE ] ; do
         read -p "Virtualization type [1]: " VIRT_TYPE
         if [ -z "$VIRT_TYPE" ] ; then
@@ -423,13 +486,24 @@ function write_terraform_config() {
     echo 'secret_key = "'$AWS_SECRET_ACCESS_KEY'"' >> credentials.tfvars
     
 
-    cp config-snippets/coreos-images.tf config-snippets/elb.tf config-snippets/nodes.tf \
+    cp config-snippets/coreos-images.tf config-snippets/elb.tf \
        config-snippets/provider.tf config-snippets/securitygroups.tf \
        config-snippets/variables.tf config-snippets/vpc.tf .
+    if [ "$NODE_MANAGEMENT_TYPE" = "asg" ] ; then
+        cp config-snippets/nodes-asg.tf .
+    else
+        cp config-snippets/nodes-tf.tf .
+        cp config-snippets/elb-tf_overridge.tf .
+    fi
 
     if [ "$VPC_TYPE" = "private" ] ; then
-        cp config-snippets/nodes-private_override.tf config-snippets/elb-private_override.tf \
-        config-snippets/vpc-private.tf .
+        cp config-snippets/elb-private_override.tf config-snippets/vpc-private.tf .
+        if [ "$NODE_MANAGEMENT_TYPE" = "asg" ] ; then
+            cp config-snippets/nodes-asg-private_override.tf .
+        else
+            cp config-snippets/nodes-tf-private_override.tf .
+        fi
+            
     else 
         rm -f nodes-private_override.tf elb-private_override.tf vpc-private.tf
     fi
@@ -475,6 +549,21 @@ Provisioning a Deis Cluster
 This script will walk you through the configuration and provisioning of a Deis
 cluster on AWS using Terraform (http://terraform.io).
 
+The following software must be installed and configured before using this
+script:
+
+ * awscli: AWS command line utility
+        http://aws.amazon.com/cli/
+
+ * terraform: Infrastructure managment
+        https://terraform.io/downloads.html
+
+ * deisctl: Deis Control Utility
+        http://docs.deis.io/en/latest/installing_deis/install-deisctl/
+
+Alternatively, you can create a cluster using Deis Pro for free (AWS charges
+will be billed to your AWS account by Amazon) at https://try.deis.com/  
+
 INTRO
 
 check_awscli
@@ -493,6 +582,7 @@ select_instance_type
 select_keypair
 select_virt_type
 select_node_count
+select_node_management
 write_terraform_config
 apply_terraform
 
