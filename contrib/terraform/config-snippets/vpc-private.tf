@@ -49,6 +49,9 @@ resource "aws_security_group" "nat" {
         protocol = "udp"
         cidr_blocks = ["${aws_subnet.deis_private.cidr_block}"]
     }
+    tags {
+        Name = "deis-nat"
+    }
 
     vpc_id = "${aws_vpc.deis.id}"
 }
@@ -85,4 +88,12 @@ resource "aws_instance" "bastion" {
 resource "aws_eip" "bastion" {
     instance = "${aws_instance.bastion.id}"
     vpc = true
+}
+
+output "bastion-ip" {
+    value = "${aws_instance.bastion.public_ip}"
+}
+
+output "nat-ip" {
+    value = "${aws_instance.nat.public_ip}"
 }

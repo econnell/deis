@@ -493,7 +493,7 @@ function write_terraform_config() {
         cp config-snippets/nodes-asg.tf .
     else
         cp config-snippets/nodes-tf.tf .
-        cp config-snippets/elb-tf_overridge.tf .
+        cp config-snippets/elb-tf_override.tf .
     fi
 
     if [ "$VPC_TYPE" = "private" ] ; then
@@ -505,7 +505,8 @@ function write_terraform_config() {
         fi
             
     else 
-        rm -f nodes-private_override.tf elb-private_override.tf vpc-private.tf
+        rm -f elb-private_override.tf vpc-private.tf nodes-asg-private_override.tf \
+            nodes-tf-private_override.tf
     fi
 }
 
