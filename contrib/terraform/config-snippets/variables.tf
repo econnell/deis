@@ -33,3 +33,7 @@ variable "cluster_size" {
 	default = "3"
 }
 
+variable "docker_volume_size" {
+	default = "500"
+}
+
