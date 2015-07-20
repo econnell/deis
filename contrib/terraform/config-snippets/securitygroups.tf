@@ -56,3 +56,26 @@ resource aws_security_group "deis_web" {
     }
 }
 
+resource aws_security_group "intra_vpc" {
+    name = "deis-allow-internal-vpc"
+    description = "Allow all cluster nodes to talk to one another - Managed by Deis Terraform"
+    vpc_id = "${aws_vpc.deis.id}"
+
+    ingress {
+        from_port = 0
+        to_port = 0
+        protocol = "-1"
+        self = true
+    }
+
+    egress {
+        from_port = 0
+        to_port = 0
+        protocol = "-1"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+
+    tags {
+        Name = "deis-allow-internal-vpc"
+    }
+}

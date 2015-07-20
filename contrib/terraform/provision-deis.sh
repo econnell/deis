@@ -1,5 +1,62 @@
 #!/bin/bash
 
+function check_already_configured() {
+    if [ -f "./terraform.tfstate" ] ; then
+        echo
+        echo "WARNING: Terraform state already exists!"
+        echo "----------------------------------------"
+        echo
+        echo "A terraform state file already exists.  If any resources are currently being"
+        echo "managed by Terraform, running this script will destroy the existing Terraform"
+        echo "state and possibly leave AWS resources unable to be managed by Terraform."
+        echo
+        echo "This means you will not be able to automatically remove these instances using"
+        echo "Terraform."
+        echo
+        echo "You should inspect the current state using the following command:"
+        echo
+        echo "    terraform show"
+        echo
+        echo "If you want to destroy all managed resources, run:"
+        echo
+        echo "    terraform destroy -var-file=config.tfvars -var-file=credentials.tfvars"
+        echo
+        echo "And then delete the terraform.tfstate file before running this script"
+        echo
+        echo "IMPORTANT NOTE: You *MUST* generate a new discovery URL next time your run"
+        echo "this script if you destroy an existing cluster."
+        echo
+        exit 1
+    fi
+}
+
+function display_intro_text() {
+    cat <<INTRO
+
+Provisioning a Deis Cluster
+---------------------------
+
+This script will walk you through the configuration and provisioning of a Deis
+cluster on AWS using Terraform (http://terraform.io).
+
+The following software must be installed and configured before using this
+script:
+
+ * awscli: AWS command line utility
+        http://aws.amazon.com/cli/
+
+ * terraform: Infrastructure managment
+        https://terraform.io/downloads.html
+
+ * deisctl: Deis Control Utility
+        http://docs.deis.io/en/latest/installing_deis/install-deisctl/
+
+Alternatively, you can create a cluster using Deis Pro for free (AWS charges
+will be billed to your AWS account by Amazon) at https://try.deis.com/
+
+INTRO
+}
+
 
 function check_awscli() {
     which aws >/dev/null 2>&1 || {
@@ -207,26 +264,74 @@ VPC_TYPES
 }
 
 function select_keypair() {
+    KEYPAIR_LIST=$(aws --output text --region $AWS_REGION --profile $AWS_PROFILE ec2 describe-key-pairs --query 'KeyPairs[].KeyName' | sort)
+    if [ -z "$KEYPAIR_LIST" ] ; then
+        echo "No SSH keypairs currently exist in this region.  A new keypair must be created to"
+        echo "continue."
+        echo
+        create_keypair
+    else
+        echo
+        echo "Select an SSH key pair"
+        echo "----------------------"
+        echo
+        for keyname in $KEYPAIR_LIST ; do
+            echo $keyname
+        done
+        KEY_NAME=
+        while [ -z "$KEY_NAME" ] ; do
+            echo
+            read -p "Select a key name or press enter to generate a new keypair: " KEY_NAME
+            if [ -z "$KEY_NAME" ] ; then
+                create_keypair
+            else
+                echo "$KEYPAIR_LIST" | grep "$KEY_NAME" >/dev/null 2>&1
+                if [ $? != "0" ] ; then
+                    echo "$KEY_NAME is not a valid key name"
+                    KEY_NAME=""
+                fi
+            fi
+        done
+    fi
+}
+
+function create_keypair() {
     echo
-    echo "Select an SSH key pair"
-    echo "----------------------"
-    echo
-    KEYPAIR_LIST=$(aws --output text ec2 describe-key-pairs --query 'KeyPairs[].KeyName' | sort)
-    for keyname in $KEYPAIR_LIST ; do
-        echo $keyname
-    done
+    KEY_LOCATION="${HOME}/.ssh"
+    if [ ! -d "$KEY_LOCATION" ] ; then
+        echo "WARNING: ${HOME}/.ssh directory does not exist.  Key will be stored in current"
+        echo "directory."
+        KEY_LOCATION="./"
+        echo
+    fi
     KEY_NAME=
     while [ -z "$KEY_NAME" ] ; do
-        echo
-        read -p "Select a key name: " KEY_NAME
-        echo "$KEYPAIR_LIST" | grep "$KEY_NAME" >/dev/null 2>&1
-        if [ $? != "0" ] ; then
-            echo "$KEY_NAME is not a valid key name"
-            KEY_NAME=""
+        read -p "Enter a keypair name [deis]: " KEY_NAME
+        if [ -z "$KEY_NAME" ] ; then
+            KEY_NAME="deis"
+        fi
+        echo "$KEY_NAME" | grep '[^-a-zA-Z0-9]' > /dev/null 2>&1
+        if [ $? = 0 ] ; then
+            echo "Only alphanumeric characters and dashes (-) are allowed."
+            KEY_NAME=
+        else
+            if [ -f "${KEY_LOCATION}/${KEY_NAME}.key" ] ; then
+                echo "${KEY_LOCATION}/${KEY_NAME}.key already exists, please choose a different"
+                echo "keypair name."
+                echo
+                KEY_NAME=
+            else
+                PRIVATE_KEY=$(aws --output json --region $AWS_REGION --profile $AWS_PROFILE ec2 create-key-pair --key-name "$KEY_NAME" --query 'KeyMaterial' | sed 's/"//g')
+                if [ -z "$PRIVATE_KEY" ] ; then
+                    KEY_NAME=
+                    echo
+                    echo "ERROR: could not create new key."
+                fi
+                echo -e "$PRIVATE_KEY" > "${KEY_LOCATION}/${KEY_NAME}.key"
+            fi
         fi
     done
 }
-
 
 function get_bastion_ami() {
     DEFAULT_BASTION_IMAGE_ID=$(aws --output text --region $AWS_REGION --profile $AWS_PROFILE ec2 describe-images --owners "099720109477" --filters Name="name",Values='ubuntu/images/hvm/ubuntu-trusty-14.04-amd64-server*' --query 'sort_by(Images, &CreationDate)[-1].ImageId')
@@ -437,6 +542,31 @@ function select_node_management() {
 
 }
 
+function enable_advanced_options() {
+    echo "Configure Advanced Options"
+    echo "--------------------------"
+    echo
+    echo "Most basic configurations should be suitable for most users for Deis evaluation"
+    echo "and simple uses; however, you can further customize your cluster."
+    echo
+    ADVANCED_OPTIONS=
+    while [ -z "$ADVANCED_OPTIONS" ] ; do
+        read -p "Would you like to view advanced options [y/N]: " ADVANCED_OPTIONS
+        if [ -z "$ADVANCED_OPTIONS" ] ; then
+            ADVANCED_OPTIONS=n
+            return
+        fi
+        if [ "$ADVANCED_OPTIONS" = "y" -o "$ADVANCED_OPTIONS" = "Y" ] ; then
+            ADVANCED_OPTIONS=y
+            return
+        fi
+        if [ "$ADVANCED_OPTIONS" = "n" -a "$ADVANCED_OPTIONS" = "N" ] ; then
+            ADVANCED_OPTIONS=n
+            return
+        fi
+    done
+}
+
 function select_virt_type() {
     INSTANCE_TYPE_FAMILY=$(echo $AWS_INSTANCE_TYPE | sed 's/^\([^.]*\)\..*$/\1/')
     if [ "$INSTANCE_TYPE_FAMILY" != "m3" -a "$INSTANCE_TYPE_FAMILY" != "c3" ] ; then
@@ -473,6 +603,63 @@ function select_virt_type() {
     done
 }
 
+function check_coreos_userdata() {
+    DISCOVERY_URL=
+    echo
+    echo "Configure an etcd discovery URL"
+    echo "-------------------------------"
+    if [ -f "../coreos/user-data" ] ; then
+        DISCOVERY_URL=$(grep -e "^[ ]\+discovery" ../coreos/user-data | sed 's/^[ ]*discovery: //')
+        echo "An existing etcd discovery URL was found in the ../coreos/user-data file."
+        echo "The URL is: $DISCOVERY_URL"
+        echo
+        echo "To prevent any new instances from interfering with an existing Deis cluster, it"
+        echo "is recommended to generate a new URL."
+        echo
+        while [ -z "$GENERATE_ETCD_URL" ] ; do
+            read -p "Generate a new etcd URL now [Y/n]: " GENERATE_ETCD_URL
+            if [ -z "$GENERATE_ETCD_URL" ] ; then
+                GENERATE_ETCD_URL=y
+            fi
+            if [ "$GENERATE_ETCD_URL" = "y" -o "$GENERATE_ETCD_URL" = "Y" ] ; then
+                GENERATE_ETCD_URL=y
+            elif [ "$GENERATE_ETCD_URL" != "n" -a "$GENERATE_ETCD_URL" != "N" ] ; then
+                GENERATE_ETCD_URL=
+            fi
+        done
+    fi
+    if [ -z "$DISCOVERY_URL" -o GENERATE_ETCD_URL=y ] ; then
+        echo -n "Generating etcd discovery URL... "
+        $(cd ../.. && make discovery-url > /dev/null)
+        echo "done"
+        echo
+    fi
+    echo -n "Generating user-data for instances..."
+    python ./gen-userdata.py > coreos-user-data.txt
+    echo "done"
+}
+
+function get_docker_volume_size() {
+    DISCOVERY_URL=
+    echo
+    echo "Configure Docker EBS Volume Size"
+    echo "--------------------------------"
+    echo
+    DOCKER_VOLUME_SIZE=
+    while [ -z "$DOCKER_VOLUME_SIZE" ] ; do
+        read -p "Enter the size (in GB) to host your Docker containers [100]: " DOCKER_VOLUME_SIZE
+        if [ -z "$DOCKER_VOLUME_SIZE" ] ; then
+            DOCKER_VOLUME_SIZE=100
+        fi
+        echo $DOCKER_VOLUME_SIZE | grep '^[0-9]\+$' > /dev/null
+        if [ $? != 0 ] ; then
+            DOCKER_VOLUME_SIZE=
+            echo
+        fi
+    done
+}
+
+
 function write_terraform_config() {
     NAT_IMAGE_ID=$(aws --output text --region $AWS_REGION --profile $AWS_PROFILE ec2 describe-images --filter Name="owner-alias",Values="amazon" --filter Name="name",Values="amzn-ami-vpc-nat*" Name="virtualization-type",Values="paravirtual" --query 'sort_by(Images, &CreationDate)[-1].ImageId')
     echo 'region = "'$AWS_REGION'"' > config.tfvars
@@ -481,6 +668,7 @@ function write_terraform_config() {
     echo 'bastion_ami = "'$BASTION_IMAGE_ID'"' >> config.tfvars
     echo 'cluster_size = "'$CLUSTER_SIZE'"' >> config.tfvars
     echo 'availability_zone = "'$AWS_AZ'"' >> config.tfvars
+    echo 'docker_volume_size = "'$DOCKER_VOLUME_SIZE'"' >> config.tfvars
 
     echo 'access_key = "'$AWS_ACCESS_KEY_ID'"' > credentials.tfvars
     echo 'secret_key = "'$AWS_SECRET_ACCESS_KEY'"' >> credentials.tfvars
@@ -542,49 +730,38 @@ function apply_terraform() {
     done
 }
 
-cat <<INTRO
-
-Provisioning a Deis Cluster
----------------------------
-
-This script will walk you through the configuration and provisioning of a Deis
-cluster on AWS using Terraform (http://terraform.io).
-
-The following software must be installed and configured before using this
-script:
-
- * awscli: AWS command line utility
-        http://aws.amazon.com/cli/
-
- * terraform: Infrastructure managment
-        https://terraform.io/downloads.html
-
- * deisctl: Deis Control Utility
-        http://docs.deis.io/en/latest/installing_deis/install-deisctl/
-
-Alternatively, you can create a cluster using Deis Pro for free (AWS charges
-will be billed to your AWS account by Amazon) at https://try.deis.com/  
-
-INTRO
-
+check_already_configured
+display_intro_text
 check_awscli
 get_aws_creds
+enable_advanced_options
 select_region
-select_vpc_config
-if [ -z "$VPC_ID" ] ; then
-    if [ "$VPC_TYPE" = "private" ] ; then
-        get_bastion_ami
-    fi
+if [ "$ADVANCED_OPTIONS" = "n" ] ; then
     select_az
+    VPC_ID=
+    VPC_TYPE=public
 else
-    get_existing_subnet
+    select_vpc_config
+    if [ -z "$VPC_ID" ] ; then
+        if [ "$VPC_TYPE" = "private" ] ; then
+            get_bastion_ami
+        fi
+        select_az
+    else
+        get_existing_subnet
+    fi
 fi
 select_instance_type
 select_keypair
 select_virt_type
+check_coreos_userdata
+get_docker_volume_size
 select_node_count
-select_node_management
+if [ "$ADVANCED_OPTIONS" = "y" ] ; then
+    select_node_management
+else
+    NODE_MANAGEMENT_TYPE=tf
+fi
 write_terraform_config
 apply_terraform
-
 
