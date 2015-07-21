@@ -51,6 +51,9 @@ script:
  * deisctl: Deis Control Utility
         http://docs.deis.io/en/latest/installing_deis/install-deisctl/
 
+ * PyYaml: Python YAML library
+        Run: pip install pyyaml
+
 Alternatively, you can create a cluster using Deis Pro for free (AWS charges
 will be billed to your AWS account by Amazon) at https://try.deis.com/
 
@@ -628,7 +631,7 @@ function check_coreos_userdata() {
             fi
         done
     fi
-    if [ -z "$DISCOVERY_URL" -o GENERATE_ETCD_URL=y ] ; then
+    if [ -z "$DISCOVERY_URL" -o "$GENERATE_ETCD_URL" = "y" ] ; then
         echo -n "Generating etcd discovery URL... "
         $(cd ../.. && make discovery-url > /dev/null)
         echo "done"
