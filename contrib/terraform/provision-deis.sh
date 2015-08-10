@@ -48,9 +48,6 @@ script:
  * terraform: Infrastructure managment
         https://terraform.io/downloads.html
 
- * deisctl: Deis Control Utility
-        http://docs.deis.io/en/latest/installing_deis/install-deisctl/
-
  * PyYaml: Python YAML library
         Run: pip install pyyaml
 
@@ -546,15 +543,15 @@ function select_node_management() {
 }
 
 function enable_advanced_options() {
-    echo "Configure Advanced Options"
-    echo "--------------------------"
+    echo "Enable Advanced Options"
+    echo "-----------------------"
     echo
     echo "Most basic configurations should be suitable for most users for Deis evaluation"
     echo "and simple uses; however, you can further customize your cluster."
     echo
     ADVANCED_OPTIONS=
     while [ -z "$ADVANCED_OPTIONS" ] ; do
-        read -p "Would you like to view advanced options [y/N]: " ADVANCED_OPTIONS
+        read -p "Would you like to enable advanced options [y/N]: " ADVANCED_OPTIONS
         if [ -z "$ADVANCED_OPTIONS" ] ; then
             ADVANCED_OPTIONS=n
             return
@@ -677,22 +674,22 @@ function write_terraform_config() {
     echo 'secret_key = "'$AWS_SECRET_ACCESS_KEY'"' >> credentials.tfvars
     
 
-    cp config-snippets/coreos-images.tf config-snippets/elb.tf \
-       config-snippets/provider.tf config-snippets/securitygroups.tf \
-       config-snippets/variables.tf config-snippets/vpc.tf .
+    cp tflib/aws/coreos-images.tf tflib/aws/elb.tf \
+       tflib/aws/provider.tf tflib/aws/securitygroups.tf \
+       tflib/aws/variables.tf tflib/aws/vpc.tf .
     if [ "$NODE_MANAGEMENT_TYPE" = "asg" ] ; then
-        cp config-snippets/nodes-asg.tf .
+        cp tflib/aws/nodes-asg.tf .
     else
-        cp config-snippets/nodes-tf.tf .
-        cp config-snippets/elb-tf_override.tf .
+        cp tflib/aws/nodes-tf.tf .
+        cp tflib/aws/elb-tf_override.tf .
     fi
 
     if [ "$VPC_TYPE" = "private" ] ; then
-        cp config-snippets/elb-private_override.tf config-snippets/vpc-private.tf .
+        cp tflib/aws/elb-private_override.tf tflib/aws/vpc-private.tf .
         if [ "$NODE_MANAGEMENT_TYPE" = "asg" ] ; then
-            cp config-snippets/nodes-asg-private_override.tf .
+            cp tflib/aws/nodes-asg-private_override.tf .
         else
-            cp config-snippets/nodes-tf-private_override.tf .
+            cp tflib/aws/nodes-tf-private_override.tf .
         fi
             
     else 
